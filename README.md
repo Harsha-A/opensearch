@@ -996,21 +996,8 @@ async function run() {
 }
 
 run().catch(console.error);
-```
 
 ---
-
-# 10) References & further reading
-
-* OpenSearch k-NN / dense_vector docs (k-NN query, mapping, HNSW). ([OpenSearch Documentation][5])
-* OpenSearch JS client docs & examples. ([OpenSearch Documentation][2])
-* Fuzzy query details (Damerau-Levenshtein). ([OpenSearch Documentation][1])
-* AWS OpenSearch k-NN guide & serverless vector collections (if you use AWS-managed service). ([AWS Documentation][4])
-
----
-
-
-Nice question — there are actually **two different things people usually mean when they say “DFS / BFS in OpenSearch”**. Below I’ll explain both meanings, when each is used, how they affect search behavior, and give practical **Node.js** examples you can use in interviews.
 
 # 1) **DFS = “Distributed Frequency Search” (search_type)**
 
