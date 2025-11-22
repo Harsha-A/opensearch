@@ -1008,3 +1008,93 @@ run().catch(console.error);
 * AWS OpenSearch k-NN guide & serverless vector collections (if you use AWS-managed service). ([AWS Documentation][4])
 
 ---
+
+
+Nice question — there are actually **two different things people usually mean when they say “DFS / BFS in OpenSearch”**. Below I’ll explain both meanings, when each is used, how they affect search behavior, and give practical **Node.js** examples you can use in interviews.
+
+# 1) **DFS = “Distributed Frequency Search” (search_type)**
+
+This is *not* the graph algorithm — here DFS stands for **Distributed Frequency Search** (term-frequency aggregation across shards). It’s an OpenSearch/Elasticsearch search mode used to get *globally consistent relevance scores* (IDF) across a distributed index.
+
+What it does and why it matters
+
+* By default OpenSearch uses **query_then_fetch**: each shard scores results using *local* term/document frequencies; those local scores are merged — fast but can give slightly inconsistent ranking across shards.
+* `dfs_query_then_fetch` first performs a tiny pre-query to collect global term and document frequencies from every shard, computes global IDF, and then executes the real query using those global stats. That yields **more accurate, consistent scoring** across shards at the cost of an extra round trip and higher latency. ([OpenSearch Documentation][1])
+
+When to use
+
+* Use when correct relative scoring across shards is important (e.g., small-shard skew causes unexpected ranking differences). Avoid for latency-sensitive requests.
+
+Node.js example (set `search_type` to `dfs_query_then_fetch`):
+
+```js
+const { Client } = require('@opensearch-project/opensearch');
+const client = new Client({ node: 'http://localhost:9200' });
+
+async function searchWithDfs() {
+  const resp = await client.search({
+    index: 'products',
+    search_type: 'dfs_query_then_fetch',   // <-- uses global IDF
+    body: {
+      query: {
+        match: { description: 'wireless headphones' }
+      },
+      size: 10
+    }
+  });
+  return resp.body.hits.hits;
+}
+```
+
+(Interview note: mention the tradeoff — more accurate scoring vs extra latency). ([OpenSearch Documentation][1])
+
+---
+
+# 2) **BFS / DFS as graph traversal — where they appear in OpenSearch (vector search / graph features)**
+
+Short answer: OpenSearch itself doesn’t run a plain textbook BFS/DFS for vector search, but graph-traversal ideas *are* central in these subsystems:
+
+### a) **HNSW (k-NN) vector search — graph traversal style**
+
+* HNSW builds a **hierarchical graph** of vectors. Searching is done by *greedy graph routing + beam/neighbor exploration* — you start at an entry point in the top layer, greedily move towards closer neighbors, descend layers, then run a beam-like search at layer-0 (examining a candidate queue of size `ef_search`). This is **neither pure BFS nor pure DFS** — it’s a specialized greedy/beam graph search designed for fast approximate nearest neighbor retrieval. Key hyperparameters are `M` (edges per node), `ef_construction`, and `ef_search` (controls candidate queue size during search). Increasing `ef_search` raises recall at the cost of latency. ([Pinecone][2])
+
+* In OpenSearch you create `knn`/`knn_vector` fields (HNSW / IVF / other engines) and then use the `knn` query. You can pass search-time parameters like `method_parameters.ef_search` (or engine-specific equivalents) to trade recall vs latency. ([OpenSearch Documentation][3])
+
+Node.js k-NN example (set `method_parameters` on the query):
+
+```js
+// assume client is the OpenSearch client
+const knnResp = await client.search({
+  index: 'products',
+  body: {
+    size: 5,
+    query: {
+      knn: {
+        embedding: {
+          vector: [0.13, 0.52, -0.30],
+          k: 5,
+          method_parameters: { ef_search: 128 }   // increase candidate queue for better recall
+        }
+      }
+    }
+  }
+});
+console.log(knnResp.body.hits.hits);
+```
+
+(Interview note: explain `M`, `ef_construction`, `ef_search` tradeoffs — memory/index time/recall/latency). ([Amazon Web Services, Inc.][4])
+
+### b) **Graph traversal / exploration features**
+
+* If you integrate OpenSearch with a graph DB or use graph-analytics connectors, classic **BFS / DFS** are used conceptually for relationship traversal (e.g., expand neighbors breadth-first to find shortest-path-like results, or depth-first for deep path discovery). OpenSearch itself has connectors/plugins to embed search into graph workflows rather than providing a full native graph DB traversal engine. Cite/mention if you’ve used GraphDB connector or built graph features on top. ([GraphDB][5])
+
+---
+
+# 3) How to explain this in an interview (short talking points)
+
+* **Be explicit** which “DFS” you mean: *Distributed Frequency Search* vs *Depth-First Search*. Employers will like that clarification.
+* For DFS (Distributed Frequency Search): describe that it computes global IDF via a small pre-query and show the `search_type` example; explain the latency vs accuracy tradeoff. ([OpenSearch Documentation][1])
+* For BFS/DFS (graph traversal): explain that vector indices (HNSW) are graph structures and searches are greedy/beam traversals (not classic BFS/DFS), and mention `M`, `ef_construction`, `ef_search` and how they affect recall/latency. Give the k-NN example and mention hybrid search possibilities (filters + knn). ([Pinecone][2])
+* If asked for implementation detail: show the `search_type` snippet and the `knn` query snippet (above) — that demonstrates both meanings practically.
+
+---
